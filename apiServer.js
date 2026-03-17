@@ -232,6 +232,62 @@ app.post('/api/restart', (req,res) => {
   }, 300);
 });
 
+// --- Proxy endpoint for Android (handles Referer server-side, rewrites m3u8 URLs) ---
+// Support both /proxy and /proxy/stream.m3u8 (ExoPlayer needs .m3u8 in URL for HLS detection)
+app.get(['/proxy', '/proxy/stream.m3u8'], async (req, res) => {
+  const { url, referer } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+        'Referer': referer || '',
+        'Origin': referer ? new URL(referer).origin : '',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const contentType = response.headers.get('content-type') || '';
+    res.set('Access-Control-Allow-Origin', '*');
+
+    const isM3U8 = contentType.includes('mpegurl') || url.endsWith('.m3u8');
+    if (isM3U8) {
+      // Rewrite URLs inside m3u8 so all sub-requests also go through proxy
+      const text = await response.text();
+      const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
+      const serverUrl = `https://${req.get('host')}`;
+      const ref = encodeURIComponent(referer || '');
+      const rewritten = text.split('\n').map(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          // Rewrite URI="..." inside tags
+          return trimmed.replace(/URI="([^"]+)"/g, (_, uri) => {
+            const absolute = new URL(uri, url).href;
+            return `URI="${serverUrl}/proxy/stream.m3u8?url=${encodeURIComponent(absolute)}&referer=${ref}"`;
+          });
+        }
+        // URL line — resolve and proxy
+        const absolute = new URL(trimmed, url).href;
+        // Use .m3u8 path for playlist URLs, plain /proxy for segments
+        const isPlaylist = absolute.includes('.m3u8') || absolute.includes('playlist') || absolute.includes('type=audio') || absolute.includes('type=subtitle') || absolute.includes('type=video');
+        const proxyPath = isPlaylist ? '/proxy/stream.m3u8' : '/proxy';
+        return `${serverUrl}${proxyPath}?url=${encodeURIComponent(absolute)}&referer=${ref}`;
+      }).join('\n');
+      res.set('Content-Type', 'application/vnd.apple.mpegurl');
+      res.send(rewritten);
+    } else {
+      // Binary content (ts segments etc) — pipe directly
+      res.set('Content-Type', contentType || 'application/octet-stream');
+      const arrayBuf = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuf));
+    }
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // --- Channels endpoints (live TV) ---
 const channelsData = require('./data/channels.json');
 
@@ -369,7 +425,7 @@ app.get('/api/streams/:type/:tmdbId', async (req,res) => {
     streams = applyFilters(streams, 'aggregate', config.minQualities, config.excludeCodecs);
     metrics.streamsReturned += streams.length;
     if (config.enableProxy) {
-      const serverUrl = `${req.protocol}://${req.get('host')}`;
+      const serverUrl = `https://${req.get('host')}`;
       streams = processStreamsForProxy(streams, serverUrl);
       // Omit original headers when proxying to avoid leaking upstream requirements
       streams = streams.map(s => { if (s && typeof s === 'object') { const { headers, ...rest } = s; return rest; } return s; });
@@ -401,7 +457,7 @@ app.get('/api/streams/:provider/:type/:tmdbId', async (req,res) => {
     streams = applyFilters(streams, prov.name, config.minQualities, config.excludeCodecs);
     metrics.streamsReturned += streams.length;
     if (config.enableProxy) {
-      const serverUrl = `${req.protocol}://${req.get('host')}`;
+      const serverUrl = `https://${req.get('host')}`;
       streams = processStreamsForProxy(streams, serverUrl);
       streams = streams.map(s => { if (s && typeof s === 'object') { const { headers, ...rest } = s; return rest; } return s; });
     }
