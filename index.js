@@ -150,5 +150,74 @@ app.get('/stream', async (req, res) => {
 // Health check
 app.get('/', (req, res) => res.json({ status: 'SAHND+ Stream API', version: '1.0' }));
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`SAHND+ API running on port ${PORT}`));
+// --- Channels endpoints (live TV) ---
+const channelsData = require('./data/channels.json');
+
+app.get('/api/channels', (req, res) => {
+  const grouped = {};
+  for (const ch of channelsData) {
+    if (!grouped[ch.category]) grouped[ch.category] = [];
+    grouped[ch.category].push(ch);
+  }
+  const categories = Object.entries(grouped).map(([name, channels]) => ({ name, channels }));
+  res.json({ success: true, count: channelsData.length, categories });
+});
+
+app.get('/api/channels/:id/stream', (req, res) => {
+  const ch = channelsData.find(c => c.id === req.params.id);
+  if (!ch) return res.status(404).json({ success: false, error: 'CHANNEL_NOT_FOUND' });
+  res.json({ success: true, channel: ch });
+});
+
+// --- Streams endpoints (matching mobile API format) ---
+app.get('/api/streams/vixsrc/:type/:tmdbId', async (req, res) => {
+  const { type, tmdbId } = req.params;
+  const { season, episode } = req.query;
+  const mediaType = type === 'series' ? 'tv' : type;
+
+  for (const source of SOURCES) {
+    const embedUrl = source.getEmbed(mediaType, tmdbId, season, episode);
+    const result = await extractStream(embedUrl, source.name);
+    if (result) {
+      return res.json({
+        success: true,
+        streams: [{
+          url: result.url,
+          subtitles: [],
+          provider: result.source,
+          headers: { Referer: result.referer },
+        }],
+      });
+    }
+  }
+  res.json({ success: false, streams: [] });
+});
+
+app.get('/api/streams/:type/:tmdbId', async (req, res) => {
+  const { type, tmdbId } = req.params;
+  const { season, episode } = req.query;
+  const mediaType = type === 'series' ? 'tv' : type;
+
+  const streams = [];
+  for (const source of SOURCES) {
+    const embedUrl = source.getEmbed(mediaType, tmdbId, season, episode);
+    const result = await extractStream(embedUrl, source.name);
+    if (result) {
+      streams.push({
+        url: result.url,
+        subtitles: [],
+        provider: result.source,
+        headers: { Referer: result.referer },
+      });
+    }
+  }
+  res.json({ success: streams.length > 0, count: streams.length, streams });
+});
+
+// Start server for local dev, export for Vercel
+if (process.env.VERCEL) {
+  module.exports = app;
+} else {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => console.log(`SAHND+ API running on port ${PORT}`));
+}
