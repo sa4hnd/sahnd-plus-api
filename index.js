@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const AbortController = require('abort-controller') || globalThis.AbortController;
+const AbortController = globalThis.AbortController;
 
 const app = express();
 app.use(cors());
