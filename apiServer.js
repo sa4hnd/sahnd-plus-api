@@ -288,17 +288,72 @@ app.get(['/proxy', '/proxy/stream.m3u8'], async (req, res) => {
   }
 });
 
-// --- Channels endpoints (live TV) ---
-const channelsData = require('./data/channels.json');
+// --- Channels endpoints (live TV) — auto-refreshing from MyTV+ API ---
+const crypto = require('crypto');
+
+const MYTV_KEY = '9z_z%C*F-JaNdWgU';
+const MYTV_IV = Buffer.from('t2w!W%u&F(J@McWf');
+const MYTV_API = 'https://androidapi.appmytv.com/android/v2/channels/getChannelsDetail_local.php';
+const MYTV_BODY = JSON.stringify({appVersion:'3.15.1',deviceType:'android',uuid:'58182e46-8a20-443e-9e43-9b63bc44589c',userId:'6414575',country:'IQ'});
+const MYTV_UA = 'And$MyTV';
+
+let channelsData = require('./data/channels.json');
+let channelsLastRefresh = 0;
+const CHANNELS_TTL = 10 * 60 * 60 * 1000; // 10 hours
+
+function decryptMyTV(encrypted) {
+  const mid = Math.floor(encrypted.length / 2);
+  const rotation = parseInt(encrypted[mid], 10);
+  const cleaned = encrypted.slice(0, mid) + encrypted.slice(mid + 1);
+  const rotatedKey = rotation > 0
+    ? MYTV_KEY.slice(-rotation) + MYTV_KEY.slice(0, -rotation)
+    : MYTV_KEY;
+  const decipher = crypto.createDecipheriv('aes-128-cbc', Buffer.from(rotatedKey), MYTV_IV);
+  let decrypted = decipher.update(Buffer.from(cleaned, 'base64'));
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return JSON.parse(decrypted.toString('utf8'));
+}
+
+async function refreshChannels() {
+  try {
+    console.log('[channels] Refreshing from MyTV+ API...');
+    const response = await fetch(MYTV_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
+      body: MYTV_BODY,
+    });
+    const encrypted = await response.text();
+    const data = decryptMyTV(encrypted.trim());
+    if (Array.isArray(data) && data.length > 100) {
+      channelsData = data.map(ch => ({
+        id: String(ch.id || ''),
+        name: ch.name || ch.title || '',
+        category: ch.category || '',
+        stream_url: ch.link || '',
+        logo: ch.fullLogoV2 || ch.logoV2 || ch.fullLogo || ch.logo || '',
+      }));
+      channelsLastRefresh = Date.now();
+      console.log(`[channels] Refreshed: ${channelsData.length} channels`);
+    }
+  } catch (e) {
+    console.error('[channels] Refresh failed:', e.message);
+  }
+}
+
+// Refresh on startup and every 10 hours
+refreshChannels();
+setInterval(refreshChannels, CHANNELS_TTL);
 
 app.get('/api/channels', (req, res) => {
+  // Refresh if stale
+  if (Date.now() - channelsLastRefresh > CHANNELS_TTL) refreshChannels();
   const grouped = {};
   for (const ch of channelsData) {
     if (!grouped[ch.category]) grouped[ch.category] = [];
     grouped[ch.category].push(ch);
   }
   const categories = Object.entries(grouped).map(([name, channels]) => ({ name, channels }));
-  res.json({ success: true, count: channelsData.length, categories });
+  res.json({ success: true, count: channelsData.length, categories, refreshedAt: channelsLastRefresh });
 });
 
 app.get('/api/channels/:id/stream', (req, res) => {
