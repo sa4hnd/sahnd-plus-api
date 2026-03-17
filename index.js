@@ -1,11 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const AbortController = require('abort-controller') || globalThis.AbortController;
 
 const app = express();
 app.use(cors());
 
-// Stream sources that we try in order to extract direct m3u8 URLs
+// Stream sources
 const SOURCES = [
   {
     name: 'VidSrc CC',
@@ -30,8 +31,11 @@ const SOURCES = [
   },
 ];
 
-// Try to extract m3u8 URL from embed page HTML
+// Extract m3u8 from embed page HTML — with short timeout for Vercel
 async function extractStream(embedUrl, sourceName) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000); // 4s max per source
+
   try {
     const res = await fetch(embedUrl, {
       headers: {
@@ -40,11 +44,12 @@ async function extractStream(embedUrl, sourceName) {
         'Referer': new URL(embedUrl).origin + '/',
       },
       redirect: 'follow',
-      timeout: 8000,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     const html = await res.text();
 
-    // Look for m3u8 URLs in the page
+    // Look for m3u8 URLs
     const m3u8Patterns = [
       /https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/gi,
       /source:\s*['"]([^'"]*\.m3u8[^'"]*)['"]/gi,
@@ -83,60 +88,70 @@ async function extractStream(embedUrl, sourceName) {
 
     return null;
   } catch (e) {
-    console.error(`Failed ${sourceName}:`, e.message);
+    clearTimeout(timer);
     return null;
   }
 }
 
-// Proxy endpoint for m3u8 segments (handles referer headers)
+// Try ALL sources in parallel — return first success
+async function findStream(type, id, s, e) {
+  const promises = SOURCES.map(async (source) => {
+    const embedUrl = source.getEmbed(type, id, s, e);
+    const result = await extractStream(embedUrl, source.name);
+    if (result) return result;
+    return null;
+  });
+
+  // Race: return first non-null result
+  const results = await Promise.all(promises);
+  return results.find(r => r !== null) || null;
+}
+
+// Proxy endpoint — buffered for Vercel compatibility
 app.get('/proxy', async (req, res) => {
   const { url, referer } = req.query;
   if (!url) return res.status(400).json({ error: 'Missing url' });
 
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
         'Referer': referer || '',
         'Origin': referer ? new URL(referer).origin : '',
       },
+      signal: controller.signal,
     });
+    clearTimeout(timer);
+
+    const buffer = await response.buffer();
     const contentType = response.headers.get('content-type');
     res.set('Content-Type', contentType || 'application/octet-stream');
     res.set('Access-Control-Allow-Origin', '*');
-    response.body.pipe(res);
+    res.send(buffer);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(502).json({ error: e.message });
   }
 });
 
-// Main stream extraction endpoint
+// Main stream extraction — sequential (legacy)
 app.get('/stream', async (req, res) => {
   const { tmdb_id, type = 'movie', s, e: ep } = req.query;
   if (!tmdb_id) return res.status(400).json({ error: 'Missing tmdb_id' });
 
-  console.log(`[${new Date().toISOString()}] Resolving ${type}/${tmdb_id}${s ? ` S${s}E${ep}` : ''}`);
-
-  // Try each source
-  for (const source of SOURCES) {
-    const embedUrl = source.getEmbed(type, tmdb_id, s, ep);
-    console.log(`  Trying ${source.name}: ${embedUrl}`);
-    const result = await extractStream(embedUrl, source.name);
-    if (result) {
-      console.log(`  ✓ Found stream from ${source.name}`);
-      return res.json({
-        success: true,
-        stream: result.url,
-        source: result.source,
-        referer: result.referer,
-        // Provide a proxied URL that handles referer automatically
-        proxied: `${req.protocol}://${req.get('host')}/proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.referer)}`,
-      });
-    }
+  const result = await findStream(type, tmdb_id, s, ep);
+  if (result) {
+    return res.json({
+      success: true,
+      stream: result.url,
+      source: result.source,
+      referer: result.referer,
+      proxied: `${req.protocol}://${req.get('host')}/proxy?url=${encodeURIComponent(result.url)}&referer=${encodeURIComponent(result.referer)}`,
+    });
   }
 
-  // If no direct stream found, return embed URLs as fallback
-  console.log('  ✗ No direct stream found, returning embeds');
   res.json({
     success: false,
     message: 'No direct stream found. Use embed fallback.',
@@ -150,7 +165,7 @@ app.get('/stream', async (req, res) => {
 // Health check
 app.get('/', (req, res) => res.json({ status: 'SAHND+ Stream API', version: '1.0' }));
 
-// --- Channels endpoints (live TV) ---
+// --- Channels ---
 const channelsData = require('./data/channels.json');
 
 app.get('/api/channels', (req, res) => {
@@ -169,26 +184,23 @@ app.get('/api/channels/:id/stream', (req, res) => {
   res.json({ success: true, channel: ch });
 });
 
-// --- Streams endpoints (matching mobile API format) ---
+// --- Stream endpoints (mobile API format) — ALL PARALLEL ---
 app.get('/api/streams/vixsrc/:type/:tmdbId', async (req, res) => {
   const { type, tmdbId } = req.params;
   const { season, episode } = req.query;
   const mediaType = type === 'series' ? 'tv' : type;
 
-  for (const source of SOURCES) {
-    const embedUrl = source.getEmbed(mediaType, tmdbId, season, episode);
-    const result = await extractStream(embedUrl, source.name);
-    if (result) {
-      return res.json({
-        success: true,
-        streams: [{
-          url: result.url,
-          subtitles: [],
-          provider: result.source,
-          headers: { Referer: result.referer },
-        }],
-      });
-    }
+  const result = await findStream(mediaType, tmdbId, season, episode);
+  if (result) {
+    return res.json({
+      success: true,
+      streams: [{
+        url: result.url,
+        subtitles: [],
+        provider: result.source,
+        headers: { Referer: result.referer },
+      }],
+    });
   }
   res.json({ success: false, streams: [] });
 });
@@ -198,23 +210,23 @@ app.get('/api/streams/:type/:tmdbId', async (req, res) => {
   const { season, episode } = req.query;
   const mediaType = type === 'series' ? 'tv' : type;
 
-  const streams = [];
-  for (const source of SOURCES) {
+  const promises = SOURCES.map(async (source) => {
     const embedUrl = source.getEmbed(mediaType, tmdbId, season, episode);
-    const result = await extractStream(embedUrl, source.name);
-    if (result) {
-      streams.push({
-        url: result.url,
-        subtitles: [],
-        provider: result.source,
-        headers: { Referer: result.referer },
-      });
-    }
-  }
+    return extractStream(embedUrl, source.name);
+  });
+
+  const results = await Promise.all(promises);
+  const streams = results.filter(r => r !== null).map(r => ({
+    url: r.url,
+    subtitles: [],
+    provider: r.source,
+    headers: { Referer: r.referer },
+  }));
+
   res.json({ success: streams.length > 0, count: streams.length, streams });
 });
 
-// Start server for local dev, export for Vercel
+// Vercel export / local dev
 if (process.env.VERCEL) {
   module.exports = app;
 } else {
