@@ -85,7 +85,7 @@ process.exit = function(code){
 };
 setImmediate(()=>console.log('[diagnostic] post-start setImmediate fired'));
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // --- Auth Routes (login before static serving) ---
 app.post('/auth/login', (req,res) => {
@@ -343,6 +343,32 @@ async function refreshChannels() {
 // Refresh on startup and every 10 hours
 refreshChannels();
 setInterval(refreshChannels, CHANNELS_TTL);
+
+// Decrypt endpoint — app sends encrypted MyTV+ data, server decrypts and returns channels
+app.post('/api/channels/decrypt', (req, res) => {
+  try {
+    const encrypted = req.body.data;
+    if (!encrypted || encrypted.length < 100) return res.status(400).json({ success: false, error: 'No data' });
+    const data = decryptMyTV(encrypted);
+    if (!Array.isArray(data)) return res.status(500).json({ success: false, error: 'Invalid data' });
+    const channels = data.map(ch => ({
+      id: String(ch.id || ''),
+      name: ch.name || ch.title || '',
+      category: ch.category || '',
+      stream_url: ch.link || '',
+      logo: ch.fullLogoV2 || ch.logoV2 || ch.fullLogo || ch.logo || '',
+    }));
+    const grouped = {};
+    for (const ch of channels) {
+      if (!grouped[ch.category]) grouped[ch.category] = [];
+      grouped[ch.category].push(ch);
+    }
+    const categories = Object.entries(grouped).map(([name, chs]) => ({ name, channels: chs }));
+    res.json({ success: true, count: channels.length, categories });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 app.get('/api/channels', (req, res) => {
   // Refresh if stale
