@@ -405,21 +405,29 @@ async function refreshMovies() {
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
     });
-    const encrypted = await response.text();
-    const data = decryptMyTV(encrypted.trim());
+    // Movies API returns plain JSON (not encrypted like channels)
+    const data = await response.json();
     if (Array.isArray(data) && data.length > 0) {
       moviesData = data.map((m, idx) => ({
         id: String(m.id || idx),
-        title: m.name || m.title || '',
-        category: m.category || '',
+        title: m.name || '',
+        category: m.packageName || '',
         year: m.year || '',
-        description: m.description || m.overview || '',
-        poster: m.fullLogo || m.logo || m.fullLogoV2 || m.logoV2 || m.poster || m.image || '',
-        backdrop: m.backdrop || m.cover || '',
-        stream_url: m.link || m.url || '',
-        rating: m.rating || m.vote || '',
+        description: m.description || '',
+        poster: m.logoV2 || '',
+        backdrop: m.imageInsideV2 || '',
+        stream_url: m.link || '',
+        stream_url_arabic: m.arabicLink || '',
+        stream_url_english: m.englishLink || '',
+        subtitle_arabic: m.titleArabicLink || '',
+        subtitle_english: m.titleEnglishLink || '',
+        subtitle_kurdish: m.titleKurdishLink || '',
+        trailer: m.trailerLink || '',
+        rating: m.rating || '',
         duration: m.duration || '',
-        language: m.language || '',
+        age: m.age || '',
+        director: m.director || '',
+        stars: m.stars || '',
       }));
       moviesLastRefresh = Date.now();
       console.log(`[mytv-movies] Refreshed: ${moviesData.length} movies`);
@@ -437,32 +445,20 @@ async function refreshSeries() {
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
     });
-    const encrypted = await response.text();
-    const data = decryptMyTV(encrypted.trim());
+    // Series API returns plain JSON (not encrypted like channels)
+    const data = await response.json();
     if (Array.isArray(data) && data.length > 0) {
       seriesData = data.map((s, idx) => ({
         id: String(s.id || idx),
-        title: s.name || s.title || '',
-        category: s.category || '',
-        year: s.year || '',
-        description: s.description || s.overview || '',
-        poster: s.fullLogo || s.logo || s.fullLogoV2 || s.logoV2 || s.poster || s.image || '',
-        backdrop: s.backdrop || s.cover || '',
-        rating: s.rating || s.vote || '',
-        language: s.language || '',
-        seasons: Array.isArray(s.seasons) ? s.seasons.map(sea => ({
-          season_number: sea.season_number || sea.seasonNumber || sea.number || 1,
-          title: sea.title || sea.name || `Season ${sea.season_number || sea.seasonNumber || sea.number || 1}`,
-          episodes: Array.isArray(sea.episodes) ? sea.episodes.map(ep => ({
-            episode_number: ep.episode_number || ep.episodeNumber || ep.number || 1,
-            title: ep.title || ep.name || `Episode ${ep.episode_number || ep.episodeNumber || ep.number || 1}`,
-            stream_url: ep.link || ep.url || '',
-            duration: ep.duration || '',
-            description: ep.description || ep.overview || '',
-          })) : [],
-        })) : [],
-        // If no seasons array, check for direct episodes or single stream
-        stream_url: s.link || s.url || '',
+        title: s.name || '',
+        category: s.seriesName || '',
+        numberOfSeasons: s.numberOfSeasons || '',
+        rating: s.rating || '',
+        age: s.age || '',
+        poster: s.logoV2 || '',
+        // Series listing has no episodes — they're not available via this API
+        seasons: [],
+        stream_url: '',
       }));
       seriesLastRefresh = Date.now();
       console.log(`[mytv-series] Refreshed: ${seriesData.length} series`);
