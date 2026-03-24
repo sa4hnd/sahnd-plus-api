@@ -394,10 +394,14 @@ const MYTV_SERIES_API = 'https://androidapi.appmytv.com/android/v2/series/getSer
 
 let moviesData = [];
 let moviesLastRefresh = 0;
+let moviesRefreshing = false;
 let seriesData = [];
 let seriesLastRefresh = 0;
+let seriesRefreshing = false;
 
 async function refreshMovies() {
+  if (moviesRefreshing) return;
+  moviesRefreshing = true;
   try {
     console.log('[mytv-movies] Refreshing from MyTV+ API...');
     const controller = new AbortController();
@@ -446,10 +450,14 @@ async function refreshMovies() {
     }
   } catch (e) {
     console.error('[mytv-movies] Refresh failed:', e.message);
+  } finally {
+    moviesRefreshing = false;
   }
 }
 
 async function refreshSeries() {
+  if (seriesRefreshing) return;
+  seriesRefreshing = true;
   try {
     console.log('[mytv-series] Refreshing from MyTV+ API...');
     const controller = new AbortController();
@@ -487,6 +495,8 @@ async function refreshSeries() {
     }
   } catch (e) {
     console.error('[mytv-series] Refresh failed:', e.message);
+  } finally {
+    seriesRefreshing = false;
   }
 }
 
