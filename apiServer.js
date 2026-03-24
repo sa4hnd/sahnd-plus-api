@@ -400,13 +400,19 @@ let seriesLastRefresh = 0;
 async function refreshMovies() {
   try {
     console.log('[mytv-movies] Refreshing from MyTV+ API...');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
     const response = await fetch(MYTV_MOVIES_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     // API may return plain JSON or encrypted data depending on region/IP
+    // Response is ~22MB for 12K movies — read as text first
     const raw = await response.text();
+    console.log(`[mytv-movies] Received ${Math.round(raw.length / 1024)}KB response`);
     let data;
     try {
       data = JSON.parse(raw);
@@ -446,11 +452,15 @@ async function refreshMovies() {
 async function refreshSeries() {
   try {
     console.log('[mytv-series] Refreshing from MyTV+ API...');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
     const response = await fetch(MYTV_SERIES_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     // API may return plain JSON or encrypted data depending on region/IP
     const raw = await response.text();
     let data;
