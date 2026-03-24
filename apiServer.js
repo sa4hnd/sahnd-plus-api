@@ -521,16 +521,19 @@ app.get('/api/mytv/movies', (req, res) => {
   if (category) {
     results = results.filter(m => m.category.toLowerCase() === category);
   }
-  // Group by category
-  const grouped = {};
-  for (const m of results) {
-    const cat = m.category || 'Other';
-    if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push(m);
-  }
-  const categories = Object.entries(grouped).map(([name, movies]) => ({ name, movies }));
   const limit = req.query.limit ? Number(req.query.limit) : 0;
   const limited = limit > 0 ? results.slice(0, limit) : results;
+  // Only compute categories when not using limit (avoids huge response)
+  let categories = [];
+  if (!limit) {
+    const grouped = {};
+    for (const m of results) {
+      const cat = m.category || 'Other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(m);
+    }
+    categories = Object.entries(grouped).map(([name, movies]) => ({ name, movies }));
+  }
   res.json({ success: true, count: results.length, categories, movies: limited, refreshedAt: moviesLastRefresh });
 });
 
@@ -555,15 +558,18 @@ app.get('/api/mytv/series', (req, res) => {
   if (category) {
     results = results.filter(s => s.category.toLowerCase() === category);
   }
-  const grouped = {};
-  for (const s of results) {
-    const cat = s.category || 'Other';
-    if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push(s);
-  }
-  const categories = Object.entries(grouped).map(([name, series]) => ({ name, series }));
   const limit = req.query.limit ? Number(req.query.limit) : 0;
   const limited = limit > 0 ? results.slice(0, limit) : results;
+  let categories = [];
+  if (!limit) {
+    const grouped = {};
+    for (const s of results) {
+      const cat = s.category || 'Other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(s);
+    }
+    categories = Object.entries(grouped).map(([name, series]) => ({ name, series }));
+  }
   res.json({ success: true, count: results.length, categories, series: limited, refreshedAt: seriesLastRefresh });
 });
 
