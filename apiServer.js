@@ -529,7 +529,9 @@ app.get('/api/mytv/movies', (req, res) => {
     grouped[cat].push(m);
   }
   const categories = Object.entries(grouped).map(([name, movies]) => ({ name, movies }));
-  res.json({ success: true, count: results.length, categories, movies: results, refreshedAt: moviesLastRefresh });
+  const limit = req.query.limit ? Number(req.query.limit) : 0;
+  const limited = limit > 0 ? results.slice(0, limit) : results;
+  res.json({ success: true, count: results.length, categories, movies: limited, refreshedAt: moviesLastRefresh });
 });
 
 app.get('/api/mytv/movies/:id', (req, res) => {
@@ -560,7 +562,9 @@ app.get('/api/mytv/series', (req, res) => {
     grouped[cat].push(s);
   }
   const categories = Object.entries(grouped).map(([name, series]) => ({ name, series }));
-  res.json({ success: true, count: results.length, categories, series: results, refreshedAt: seriesLastRefresh });
+  const limit = req.query.limit ? Number(req.query.limit) : 0;
+  const limited = limit > 0 ? results.slice(0, limit) : results;
+  res.json({ success: true, count: results.length, categories, series: limited, refreshedAt: seriesLastRefresh });
 });
 
 app.get('/api/mytv/series/:id', (req, res) => {
