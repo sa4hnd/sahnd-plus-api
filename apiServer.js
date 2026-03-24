@@ -388,6 +388,159 @@ app.get('/api/channels/:id/stream', (req, res) => {
   res.json({ success: true, channel: ch });
 });
 
+// --- MyTV+ Movies & Series — auto-refreshing ---
+const MYTV_MOVIES_API = 'https://androidapi.appmytv.com/android/v2/movies/getMoviesDetail_local.php';
+const MYTV_SERIES_API = 'https://androidapi.appmytv.com/android/v2/series/getSeriesDetail_local.php';
+
+let moviesData = [];
+let moviesLastRefresh = 0;
+let seriesData = [];
+let seriesLastRefresh = 0;
+
+async function refreshMovies() {
+  try {
+    console.log('[mytv-movies] Refreshing from MyTV+ API...');
+    const response = await fetch(MYTV_MOVIES_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
+      body: MYTV_BODY,
+    });
+    const encrypted = await response.text();
+    const data = decryptMyTV(encrypted.trim());
+    if (Array.isArray(data) && data.length > 0) {
+      moviesData = data.map((m, idx) => ({
+        id: String(m.id || idx),
+        title: m.name || m.title || '',
+        category: m.category || '',
+        year: m.year || '',
+        description: m.description || m.overview || '',
+        poster: m.fullLogo || m.logo || m.fullLogoV2 || m.logoV2 || m.poster || m.image || '',
+        backdrop: m.backdrop || m.cover || '',
+        stream_url: m.link || m.url || '',
+        rating: m.rating || m.vote || '',
+        duration: m.duration || '',
+        language: m.language || '',
+      }));
+      moviesLastRefresh = Date.now();
+      console.log(`[mytv-movies] Refreshed: ${moviesData.length} movies`);
+    }
+  } catch (e) {
+    console.error('[mytv-movies] Refresh failed:', e.message);
+  }
+}
+
+async function refreshSeries() {
+  try {
+    console.log('[mytv-series] Refreshing from MyTV+ API...');
+    const response = await fetch(MYTV_SERIES_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
+      body: MYTV_BODY,
+    });
+    const encrypted = await response.text();
+    const data = decryptMyTV(encrypted.trim());
+    if (Array.isArray(data) && data.length > 0) {
+      seriesData = data.map((s, idx) => ({
+        id: String(s.id || idx),
+        title: s.name || s.title || '',
+        category: s.category || '',
+        year: s.year || '',
+        description: s.description || s.overview || '',
+        poster: s.fullLogo || s.logo || s.fullLogoV2 || s.logoV2 || s.poster || s.image || '',
+        backdrop: s.backdrop || s.cover || '',
+        rating: s.rating || s.vote || '',
+        language: s.language || '',
+        seasons: Array.isArray(s.seasons) ? s.seasons.map(sea => ({
+          season_number: sea.season_number || sea.seasonNumber || sea.number || 1,
+          title: sea.title || sea.name || `Season ${sea.season_number || sea.seasonNumber || sea.number || 1}`,
+          episodes: Array.isArray(sea.episodes) ? sea.episodes.map(ep => ({
+            episode_number: ep.episode_number || ep.episodeNumber || ep.number || 1,
+            title: ep.title || ep.name || `Episode ${ep.episode_number || ep.episodeNumber || ep.number || 1}`,
+            stream_url: ep.link || ep.url || '',
+            duration: ep.duration || '',
+            description: ep.description || ep.overview || '',
+          })) : [],
+        })) : [],
+        // If no seasons array, check for direct episodes or single stream
+        stream_url: s.link || s.url || '',
+      }));
+      seriesLastRefresh = Date.now();
+      console.log(`[mytv-series] Refreshed: ${seriesData.length} series`);
+    }
+  } catch (e) {
+    console.error('[mytv-series] Refresh failed:', e.message);
+  }
+}
+
+// Refresh movies & series on startup and every 10 hours
+refreshMovies();
+refreshSeries();
+setInterval(refreshMovies, CHANNELS_TTL);
+setInterval(refreshSeries, CHANNELS_TTL);
+
+// Movies endpoints
+app.get('/api/mytv/movies', (req, res) => {
+  if (Date.now() - moviesLastRefresh > CHANNELS_TTL) refreshMovies();
+  let results = moviesData;
+  const q = (req.query.q || '').toLowerCase().trim();
+  if (q) {
+    results = results.filter(m =>
+      m.title.toLowerCase().includes(q) ||
+      m.category.toLowerCase().includes(q)
+    );
+  }
+  const category = (req.query.category || '').toLowerCase().trim();
+  if (category) {
+    results = results.filter(m => m.category.toLowerCase() === category);
+  }
+  // Group by category
+  const grouped = {};
+  for (const m of results) {
+    const cat = m.category || 'Other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(m);
+  }
+  const categories = Object.entries(grouped).map(([name, movies]) => ({ name, movies }));
+  res.json({ success: true, count: results.length, categories, movies: results, refreshedAt: moviesLastRefresh });
+});
+
+app.get('/api/mytv/movies/:id', (req, res) => {
+  const movie = moviesData.find(m => m.id === req.params.id);
+  if (!movie) return res.status(404).json({ success: false, error: 'MOVIE_NOT_FOUND' });
+  res.json({ success: true, movie });
+});
+
+// Series endpoints
+app.get('/api/mytv/series', (req, res) => {
+  if (Date.now() - seriesLastRefresh > CHANNELS_TTL) refreshSeries();
+  let results = seriesData;
+  const q = (req.query.q || '').toLowerCase().trim();
+  if (q) {
+    results = results.filter(s =>
+      s.title.toLowerCase().includes(q) ||
+      s.category.toLowerCase().includes(q)
+    );
+  }
+  const category = (req.query.category || '').toLowerCase().trim();
+  if (category) {
+    results = results.filter(s => s.category.toLowerCase() === category);
+  }
+  const grouped = {};
+  for (const s of results) {
+    const cat = s.category || 'Other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(s);
+  }
+  const categories = Object.entries(grouped).map(([name, series]) => ({ name, series }));
+  res.json({ success: true, count: results.length, categories, series: results, refreshedAt: seriesLastRefresh });
+});
+
+app.get('/api/mytv/series/:id', (req, res) => {
+  const serie = seriesData.find(s => s.id === req.params.id);
+  if (!serie) return res.status(404).json({ success: false, error: 'SERIES_NOT_FOUND' });
+  res.json({ success: true, serie });
+});
+
 // --- Basic informational endpoints ---
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'tmdb-embed-api', time: new Date().toISOString() });
