@@ -405,8 +405,14 @@ async function refreshMovies() {
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
     });
-    // Movies API returns plain JSON (not encrypted like channels)
-    const data = await response.json();
+    // API may return plain JSON or encrypted data depending on region/IP
+    const raw = await response.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = decryptMyTV(raw.trim());
+    }
     if (Array.isArray(data) && data.length > 0) {
       moviesData = data.map((m, idx) => ({
         id: String(m.id || idx),
@@ -445,8 +451,14 @@ async function refreshSeries() {
       headers: { 'Content-Type': 'application/json', 'User-Agent': MYTV_UA },
       body: MYTV_BODY,
     });
-    // Series API returns plain JSON (not encrypted like channels)
-    const data = await response.json();
+    // API may return plain JSON or encrypted data depending on region/IP
+    const raw = await response.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = decryptMyTV(raw.trim());
+    }
     if (Array.isArray(data) && data.length > 0) {
       seriesData = data.map((s, idx) => ({
         id: String(s.id || idx),
