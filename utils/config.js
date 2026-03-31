@@ -164,8 +164,8 @@ function loadConfig() {
   defaultProviders: (process.env.DEFAULT_PROVIDERS || '').split(/[\s,]+/).map(p=>p.trim().toLowerCase()).filter(Boolean),
     minQualitiesRaw: process.env.MIN_QUALITIES || null,
     excludeCodecsRaw: process.env.EXCLUDE_CODECS || null,
-    tmdbApiKey: process.env.TMDB_API_KEY || null,
-  tmdbApiKeys: parseJsonMaybe(process.env.TMDB_API_KEYS) || null,
+    tmdbApiKey: process.env.TMDB_API_KEY || '3ea9ba88a81be0f283362871b7f6b19e',
+  tmdbApiKeys: parseJsonMaybe(process.env.TMDB_API_KEYS) || ['3ea9ba88a81be0f283362871b7f6b19e'],
     febboxCookies: parseCookies(process.env.FEBBOX_COOKIES),
     // Extended advanced config (may not exist in env)
     disableCache: process.env.DISABLE_CACHE,
